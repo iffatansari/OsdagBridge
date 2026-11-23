@@ -6,6 +6,7 @@
 from osdagbridge.core.utils.common import (
     KEY_CB_LOAD,
     KEY_LL_CUSTOM_VEHICLES,
+    KEY_LL_ECCENTRICITY,
     KEY_LL_FOOTPATH_PRESSURE_MODE,
     KEY_LL_FOOTPATH_PRESSURE_VALUE,
     KEY_LL_IRC_70R_BOGIE,
@@ -54,6 +55,44 @@ from osdagbridge.core.utils.common import (
 )
 
 from osdagbridge.core.reports.report_utils import _tex, _render_value
+
+def _live_load_tables(input_dict, vehicles, impact_factor, braking_load, footway_value):
+    """Render separate vehicle and footway tables using the UI selections."""
+    ecc = _tex(input_dict.get(KEY_LL_ECCENTRICITY, "1.20"))
+    rows = []
+    for vehicle in vehicles:
+        rows.append(f"{_tex(vehicle)} & --- & {_tex(impact_factor)} & {_tex(braking_load)} & {ecc} \\\\")
+    vehicle_rows = "\n\\hline\n".join(rows) if rows else r"None & --- & N/A & N/A & --- \\\\"
+    return (r"""\begin{longtable}{|L{3.4cm}|L{3.0cm}|C{2.2cm}|C{2.3cm}|C{2.4cm}|}
+\caption{\textbf{Vehicle Live Loads (LL)}}\\
+\hline
+\textbf{Vehicle class} & \textbf{Total load (kN)} & \textbf{Impact factor} & \textbf{Braking load} & \textbf{Eccentricity (m)} \\
+\hline
+\endfirsthead
+\multicolumn{5}{l}{\small\itshape Vehicle Live Loads (continued)}\\
+\hline
+\textbf{Vehicle class} & \textbf{Total load (kN)} & \textbf{Impact factor} & \textbf{Braking load} & \textbf{Eccentricity (m)} \\
+\hline
+\endhead
+""" + vehicle_rows + r"""
+\end{longtable}
+\vspace{0.6em}
+\begin{longtable}{|L{5.0cm}|C{3.2cm}|L{6.6cm}|}
+\caption{\textbf{Footway Live Load}}\\
+\hline
+\textbf{Parameter} & \textbf{Value} & \textbf{Basis / unit} \\
+\hline
+\endfirsthead
+\multicolumn{3}{l}{\small\itshape Footway Live Load (continued)}\\
+\hline
+\textbf{Parameter} & \textbf{Value} & \textbf{Basis / unit} \\
+\hline
+\endhead
+\textnormal{Footway pressure} & """ + _tex(footway_value) + r""" & kN/m\textsuperscript{2}; IRC 6 Cl. 206.1 or user-defined \\
+\hline
+\textnormal{Application} & Uniformly distributed & Footpath / footway area \\
+\hline
+\end{longtable}""")
 
 def ch3_loads(input_dict):
     # Live load vehicle names mapping
@@ -300,20 +339,7 @@ This section summarizes all loads applied to the bridge and the load combination
 \end{longtable}
 
 \vspace{1em}
-\begin{longtable}{|L{5.5cm}|p{10.0cm}|}
-\caption{\textbf{Live Loads (LL)}}
-\hline
-\textbf{parameter} & \textbf{value} \\
-\hline
-\textnormal{Vehicles Considered} & """ + _tex(vehicles_str) + r""" \\[6pt]
-\hline
-\textnormal{Impact Factor (IRC 6)} & """ + _tex(impact_factor_str) + r""" \\[6pt]
-\hline
-\textnormal{Braking Load (IRC 6)} & """ + _tex(braking_force_str) + r""" \\[6pt]
-\hline
-\textnormal{Footpath Live Load (if applicable)} & """ + (_render_value(input_dict, KEY_LL_FOOTPATH_PRESSURE_VALUE, ' kN/m\\textsuperscript{2}')) + r""" \\[6pt]
-\hline
-\end{longtable}
+""" + _live_load_tables(input_dict, vehicles, impact_factor_str, braking_force_str, fp_str) + r"""
 
 \vspace{1em}
 \begin{longtable}{|L{5.5cm}|p{10.0cm}|}

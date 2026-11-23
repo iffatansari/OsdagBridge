@@ -1,4 +1,4 @@
-def ch7_quantities(input_dict):
+def ch7_quantities(input_dict, chart_paths=None):
     return r"""
 \chapter{Material Take-off \& Quantity Summary}
 \label{ch:material-takeoff}

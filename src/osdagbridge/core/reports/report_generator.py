@@ -119,6 +119,8 @@ from osdagbridge.core.utils.common import (
 )
 
 from osdagbridge.core.reports.report_utils import _tex
+from .styles import DOCUMENT_GEOMETRY, THEME
+from .visualizations import create_report_charts
 from .executive_summary import executive_summary
 from .chap1 import ch1_project_info
 from .chap2 import ch2_input_parameters
@@ -156,7 +158,7 @@ def preamble(project_name, job_number, report_date, report_version='Rev 0'):
 \documentclass[12pt,a4paper]{report}
 
 % Packages
-\usepackage[a4paper, margin=1in]{geometry}
+\usepackage[a4paper, left=1in, right=1in, top=0.85in, bottom=0.85in, headheight=15pt, footskip=24pt]{geometry}
 \usepackage{graphicx}
 \usepackage{amsmath}
 \usepackage{amssymb}
@@ -833,6 +835,58 @@ _FIGURE_MAP = [
     ('defl_ll',               'defl_ll.png'),
 ]
 
+def _ensure_longtable_headers(tex: str) -> str:
+    """Add explicit first-page and continuation headers to report longtables.
+
+    A small brace-aware scanner is used instead of a regex because LaTeX column
+    specifications commonly contain nested ``>{...}`` declarations.
+    """
+    begin_token = r"\begin{longtable}"
+    end_token = r"\end{longtable}"
+    cursor = 0
+    chunks = []
+    while True:
+        start = tex.find(begin_token, cursor)
+        if start < 0:
+            chunks.append(tex[cursor:])
+            break
+        chunks.append(tex[cursor:start])
+        spec_start = tex.find("{", start + len(begin_token))
+        if spec_start < 0:
+            chunks.append(tex[start:])
+            break
+        depth = 0
+        spec_end = None
+        for idx in range(spec_start, len(tex)):
+            if tex[idx] == "{":
+                depth += 1
+            elif tex[idx] == "}":
+                depth -= 1
+                if depth == 0:
+                    spec_end = idx + 1
+                    break
+        if spec_end is None:
+            chunks.append(tex[start:])
+            break
+        end = tex.find(end_token, spec_end)
+        if end < 0:
+            chunks.append(tex[start:])
+            break
+        body = tex[spec_end:end]
+        if r"\endfirsthead" not in body and r"\endhead" not in body:
+            import re
+            header = re.search(r"(\\textbf\{.*?\\\\)(?:\n|\r\n)", body, re.S)
+            if header:
+                header_row = header.group(1)
+                continuation = (r"\endfirsthead" + "\n"
+                                + r"\multicolumn{20}{l}{\small\itshape Continued from previous page}\\" + "\n"
+                                + r"\hline" + "\n" + header_row + "\n"
+                                + r"\hline" + "\n" + r"\endhead" + "\n")
+                body = body[:header.end()] + continuation + body[header.end():]
+        chunks.append(tex[start:spec_end] + body + end_token)
+        cursor = end + len(end_token)
+    return "".join(chunks)
+
 def generate_report(payload, request):
     # type: (ReportPayload, ReportRequest) -> ReportResult
     """Compile the full OsdagBridge Design Report to PDF (+ .tex source)."""
@@ -868,6 +922,12 @@ def generate_report(payload, request):
             tmp_images = os.path.join(tmp_dir, 'images')
             os.makedirs(tmp_images, exist_ok=True)
             fig_paths = {}
+            # Compute BOQ values before chart creation so material plots use the
+            # exact same quantities as Chapter 7.
+            quantities = calculate_material_quantities(payload.inputs, payload.output_dict)
+            payload.inputs.update(quantities)
+            chart_paths = create_report_charts(payload.output_dict, payload.inputs, tmp_images)
+            fig_paths.update(chart_paths)
             for attr, img_bytes in list(payload.figure_data.items()):
                 if img_bytes:
                     p = os.path.join(tmp_images, attr + '.png')
@@ -924,11 +984,18 @@ def generate_report(payload, request):
             if 'analysis' in secs:
                 doc_parts.append(ch4_analysis(payload.analysis_summary, fig_paths, bridge, span_m))
             if 'design_checks' in secs:
-                doc_parts.append(ch5_design_checks(payload.design_checks, bridge))
+                doc_parts.append(ch5_design_checks(payload.design_checks, bridge, chart_paths))
+                if chart_paths.get('utilization_summary'):
+                    doc_parts.append(r'\begin{figure}[H]\centering\includegraphics[width=0.92\textwidth]{' + chart_paths['utilization_summary'].replace('\\', '/') + r'}\caption*{Governing utilization ratios; dashed line denotes UR = 1.0.}\end{figure}')
             if 'drawings' in secs and payload.options.include_figures:
                 doc_parts.append(ch6_drawings(fig_paths))
 
-            doc_parts.append(ch7_quantities(payload.inputs))
+            doc_parts.append(ch7_quantities(payload.inputs, chart_paths))
+            if chart_paths.get('steel_quantities') or chart_paths.get('concrete_reinforcement_quantities'):
+                doc_parts.append(r'\clearpage\section*{Material Quantity Visualizations}')
+                for _key, _caption in [('steel_quantities', 'Structural steel tonnage by component.'), ('concrete_reinforcement_quantities', 'Concrete volume versus reinforcement steel weight.')]:
+                    if chart_paths.get(_key):
+                        doc_parts.append(r'\begin{figure}[H]\centering\includegraphics[width=0.88\textwidth]{' + chart_paths[_key].replace('\\', '/') + r'}\caption*{' + _caption + r'}\end{figure}')
 
             mode = str(payload.inputs.get(KEY_DESIGN_MODE, "Optimized")).strip().lower()
             is_custom = mode in {"custom", "customized"}
@@ -942,10 +1009,7 @@ def generate_report(payload, request):
             full_tex = "\n".join(doc_parts)
 
 
-            # NOTE: longtable header repetition is handled per-table in each
-            # chapter file (e.g. \endfirsthead / \endhead).  No automatic
-            # post-processing is applied here to avoid mis-ordering captions
-            # and column headings.
+            full_tex = _ensure_longtable_headers(full_tex)
 
             tmp_tex = os.path.join(tmp_dir, request.file_stem + '.tex')
             tmp_pdf = os.path.join(tmp_dir, request.file_stem + '.pdf')
